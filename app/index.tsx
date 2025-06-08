@@ -1,4 +1,7 @@
+import { Notification, notifications } from "@/mock/data";
 import { useTheme } from "@react-navigation/native";
+import { BlurView } from "expo-blur";
+import * as Haptics from "expo-haptics";
 import { Image, ImageBackground } from "expo-image";
 import React, { useState } from "react";
 import { Dimensions, StyleSheet, Text, View } from "react-native";
@@ -8,6 +11,8 @@ import {
   GestureHandlerRootView,
 } from "react-native-gesture-handler";
 import Animated, {
+  Extrapolation,
+  interpolate,
   LinearTransition,
   runOnJS,
   SharedValue,
@@ -20,93 +25,30 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type Notification = {
-  id: string;
-  icon: any;
-  title: string;
-  subtitle?: string;
-  avatar?: string;
-  time: string;
-};
-
-const notifications = [
-  {
-    id: "1",
-    icon: require("../assets/images/icon.png"), // Replace with your own icon or use a placeholder
-    title: "Reminder",
-    subtitle: "Re: Invitation: Join Nothing in Lo...",
-    avatar: "https://randomuser.me/api/portraits/men/1.jpg",
-    time: "3h",
-  },
-  {
-    id: "2",
-    icon: require("../assets/images/icon.png"),
-    title: "Just a reminder to step on the sca...",
-    subtitle: "",
-    time: "3h",
-  },
-  {
-    id: "3",
-    icon: require("../assets/images/icon.png"),
-    title: "Threads",
-    subtitle: "33 fediverse users liked your carousel",
-    time: "5h",
-  },
-  {
-    id: "4",
-    icon: require("../assets/images/icon.png"),
-    title: "Upcoming live concert",
-    subtitle: "deadmau5 performing on Sat, A...",
-    time: "20h",
-  },
-  {
-    id: "5",
-    icon: require("../assets/images/icon.png"),
-    title: "2025 Empire",
-    subtitle: "Sam Alston: Shared a photo",
-    time: "21h",
-  },
-  {
-    id: "6",
-    icon: require("../assets/images/icon.png"),
-    title: "Messenger",
-    subtitle: "You received a message",
-    time: "1d",
-  },
-  {
-    id: "7",
-    icon: require("../assets/images/icon.png"),
-    title: "parmesanpapi17",
-    subtitle: "End of an era 😔",
-    time: "1d",
-  },
-  {
-    id: "8",
-    icon: require("../assets/images/icon.png"),
-    title: "#social",
-    subtitle: "F1 is up there for most...",
-    time: "2d",
-  },
-  {
-    id: "9",
-    icon: require("../assets/images/icon.png"),
-    title: "Reduce screen timeout",
-    subtitle: "Long screen timeout consumes battery...",
-    time: "3d",
-  },
-];
-
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
-const NotificationCard = ({
-  item,
-  isPanning,
-  onItemDelete,
-}: {
+interface NotificationCardProps {
   item: Notification;
   isPanning: SharedValue<boolean>;
   onItemDelete: (id: string) => void;
-}) => {
+  adjacentOffset?: SharedValue<number>;
+  index: number;
+  activeIndex: SharedValue<number>;
+  firstItem: boolean;
+  lastItem: boolean;
+}
+
+const NotificationCard = (props: NotificationCardProps) => {
+  const {
+    item,
+    isPanning,
+    onItemDelete,
+    adjacentOffset,
+    index,
+    activeIndex,
+    firstItem,
+    lastItem,
+  } = props;
   const theme = useTheme();
   const offsetX = useSharedValue(0);
   const startX = useSharedValue(0);
@@ -114,12 +56,42 @@ const NotificationCard = ({
   const lastX = useSharedValue(0);
   const lastTime = useSharedValue(0);
   const velocity = useSharedValue(0);
+  const adjacentTension = useSharedValue(false);
+  const prevTension = useSharedValue(false);
+  const minBorderRadius = 6;
+
+  const isAdjacent = useDerivedValue(() => {
+    return Math.abs(activeIndex.get() - index) === 1;
+  });
+
+  const isPrevious = useDerivedValue(() => {
+    return index < activeIndex.get();
+  });
 
   useDerivedValue(() => {
-    if (Math.abs(offsetX.value) > SCREEN_WIDTH / 2) {
-      offsetX.value = withSpring(2 * offsetX.value);
+    const currentTension = adjacentTension.get();
+    if (prevTension.get() && !currentTension) {
+      runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Light);
     }
-    if (Math.abs(offsetX.value) > SCREEN_WIDTH) {
+    prevTension.set(currentTension);
+  });
+
+  useDerivedValue(() => {
+    if (!isPanning.get()) {
+      if (Math.abs(offsetX.get()) > SCREEN_WIDTH * 0.1) {
+        offsetX.set(
+          withSpring(2 * offsetX.get(), {
+            mass: 1,
+            damping: 25,
+            stiffness: 500,
+            overshootClamping: false,
+            restDisplacementThreshold: 0.001,
+            restSpeedThreshold: 0.001,
+          })
+        );
+      }
+    }
+    if (Math.abs(offsetX.get()) > SCREEN_WIDTH) {
       runOnJS(onItemDelete)(item.id);
     }
   });
@@ -128,61 +100,204 @@ const NotificationCard = ({
     .onTouchesDown((e) => {
       const x = e.changedTouches[0]?.absoluteX;
       const y = e.changedTouches[0]?.absoluteY;
+      adjacentTension.set(true);
       if (x != null && y != null) {
-        startX.value = x;
-        startY.value = y;
-        lastX.value = x;
-        lastTime.value = Date.now();
+        startX.set(x);
+        startY.set(y);
+        lastX.set(x);
+        lastTime.set(Date.now());
+        activeIndex.set(index);
       }
     })
     .onTouchesMove((e, manager) => {
       const x = e.changedTouches[0]?.absoluteX;
       const y = e.changedTouches[0]?.absoluteY;
       if (x != null && y != null) {
-        const deltaX = x - startX.value;
-        const deltaY = y - startY.value;
+        const deltaX = x - startX.get();
+        const deltaY = y - startY.get();
         const currentTime = Date.now();
-        const timeDelta = currentTime - lastTime.value;
+        const timeDelta = currentTime - lastTime.get();
+        const heavyDelta = deltaX * 0.92;
 
         // Calculate velocity (pixels per millisecond)
         if (timeDelta > 0) {
-          velocity.value = (x - lastX.value) / timeDelta;
+          velocity.set((x - lastX.get()) / timeDelta);
         }
 
-        lastX.value = x;
-        lastTime.value = currentTime;
+        lastX.set(x);
+        lastTime.set(currentTime);
 
-        if (Math.abs(deltaX) > 5 && Math.abs(deltaY) < 5) {
-          isPanning.value = true;
+        if (Math.abs(heavyDelta) > 5 && Math.abs(deltaY) < 5) {
+          isPanning.set(true);
           manager.activate();
         }
-        offsetX.value = deltaX;
+        offsetX.set(
+          Math.abs(heavyDelta) < SCREEN_WIDTH * 0.1 ? heavyDelta : deltaX
+        );
+        if (adjacentOffset) {
+          if (
+            Math.abs(heavyDelta) < SCREEN_WIDTH * 0.1 &&
+            adjacentTension.get()
+          ) {
+            adjacentOffset.set(heavyDelta * 0.3);
+          } else {
+            adjacentOffset.set(
+              withSpring(
+                0,
+                {
+                  mass: 1,
+                  damping: 25,
+                  stiffness: 500,
+                  overshootClamping: false,
+                  restDisplacementThreshold: 0.001,
+                  restSpeedThreshold: 0.001,
+                },
+                () => {
+                  if (adjacentTension.get()) {
+                    adjacentTension.set(false);
+                  }
+                }
+              )
+            );
+          }
+        }
       }
     })
     .onTouchesUp((e, manager) => {
       // Convert velocity to pixels per second for withDecay
-      const velocityInPixelsPerSecond = velocity.value * 1000;
+      const velocityInPixelsPerSecond = velocity.get() * 1000;
       if (Math.abs(velocityInPixelsPerSecond) > 1000) {
-        offsetX.value = withDecay({
-          velocity: velocityInPixelsPerSecond,
-          deceleration: 0.998,
-        });
+        offsetX.set(
+          withDecay({
+            velocity: velocityInPixelsPerSecond,
+            deceleration: 0.998,
+          })
+        );
       } else {
-        offsetX.value = withSpring(0);
+        offsetX.set(
+          withSpring(0, {
+            mass: 1,
+            damping: 25,
+            stiffness: 500,
+            overshootClamping: false,
+            restDisplacementThreshold: 0.001,
+            restSpeedThreshold: 0.001,
+          })
+        );
+        if (adjacentOffset) {
+          adjacentOffset.set(
+            withSpring(0, {
+              mass: 1,
+              damping: 25,
+              stiffness: 500,
+              overshootClamping: false,
+              restDisplacementThreshold: 0.001,
+              restSpeedThreshold: 0.001,
+            })
+          );
+        }
       }
-      isPanning.value = false;
+      isPanning.set(false);
       manager.end();
     })
     .onTouchesCancelled((e, manager) => {
-      offsetX.value = withSpring(0);
-      isPanning.value = false;
+      offsetX.set(withSpring(0));
+      if (adjacentOffset) {
+        adjacentOffset.set(withSpring(0));
+      }
+      isPanning.set(false);
       manager.end();
     });
+
   const animatedItemStyle = useAnimatedStyle(() => {
+    const isActive = activeIndex.get() === index;
+    const isAdjacentToActive = isAdjacent.get();
+    const isPrev = isPrevious.get();
+
+    if (!isActive && !isAdjacentToActive) {
+      return {
+        transform: [{ translateX: 0 }],
+        ...(firstItem && {
+          borderTopLeftRadius: 40,
+          borderTopRightRadius: 40,
+        }),
+        ...(lastItem && {
+          borderBottomLeftRadius: 40,
+          borderBottomRightRadius: 40,
+        }),
+      };
+    }
+
+    if (isActive) {
+      const border = interpolate(
+        offsetX.get(),
+        [-SCREEN_WIDTH * 0.1, 0, SCREEN_WIDTH * 0.1],
+        [20, minBorderRadius, 20],
+        Extrapolation.CLAMP
+      );
+      return {
+        transform: [{ translateX: offsetX.get() }],
+        borderRadius: border,
+        borderTopLeftRadius: border,
+        borderTopRightRadius: border,
+        borderBottomLeftRadius: border,
+        borderBottomRightRadius: border,
+      };
+    }
+
+    if (isAdjacentToActive) {
+      const offset = adjacentOffset?.get() || 0;
+      const absOffset = Math.abs(offset);
+
+      return {
+        transform: [{ translateX: offset }],
+        ...(offset > 0
+          ? isPrev
+            ? {
+                borderBottomLeftRadius: interpolate(
+                  absOffset,
+                  [0, SCREEN_WIDTH * 0.1],
+                  [minBorderRadius, 100]
+                ),
+              }
+            : {
+                borderTopLeftRadius: interpolate(
+                  absOffset,
+                  [0, SCREEN_WIDTH * 0.1],
+                  [minBorderRadius, 100]
+                ),
+              }
+          : isPrev
+          ? {
+              borderBottomRightRadius: interpolate(
+                absOffset,
+                [0, SCREEN_WIDTH * 0.1],
+                [minBorderRadius, 100]
+              ),
+            }
+          : {
+              borderTopRightRadius: interpolate(
+                absOffset,
+                [0, SCREEN_WIDTH * 0.1],
+                [minBorderRadius, 100]
+              ),
+            }),
+      };
+    }
+
     return {
-      transform: [{ translateX: offsetX.value }],
+      transform: [{ translateX: adjacentOffset?.get() || 0 }],
     };
-  });
+  }, [
+    activeIndex,
+    adjacentOffset,
+    firstItem,
+    index,
+    lastItem,
+    offsetX,
+    isAdjacent,
+    isPrevious,
+  ]);
 
   return (
     <GestureDetector gesture={panGesture}>
@@ -190,9 +305,30 @@ const NotificationCard = ({
         style={[
           styles.card,
           animatedItemStyle,
-          { backgroundColor: theme.colors.card, borderRadius: 6 },
+          {
+            borderRadius: minBorderRadius,
+          },
+          firstItem && {
+            borderTopLeftRadius: 40,
+            borderTopRightRadius: 40,
+          },
+          lastItem && {
+            borderBottomLeftRadius: 40,
+            borderBottomRightRadius: 40,
+          },
         ]}
       >
+        <BlurView
+          intensity={100}
+          tint={"systemChromeMaterial"}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+          }}
+        />
         <Image source={item.icon} style={styles.icon} />
         <View style={styles.textContainer}>
           <Text
@@ -205,7 +341,7 @@ const NotificationCard = ({
             <Text
               style={[
                 styles.subtitle,
-                { color: theme.colors.text, opacity: 0.5 },
+                { color: theme.colors.text, opacity: 0.8 },
               ]}
               numberOfLines={1}
             >
@@ -213,7 +349,7 @@ const NotificationCard = ({
             </Text>
           )}
         </View>
-        <Text style={[styles.time, { color: theme.colors.text, opacity: 0.5 }]}>
+        <Text style={[styles.time, { color: theme.colors.text, opacity: 0.8 }]}>
           {item.time}
         </Text>
       </Animated.View>
@@ -224,12 +360,14 @@ const NotificationCard = ({
 export default function Index() {
   const theme = useTheme();
   const { top, bottom } = useSafeAreaInsets();
+  const [data, setData] = useState<Notification[]>(notifications);
   const isPanning = useSharedValue(false);
-  const [data, setData] = useState(notifications);
+  const adjacentOffset = useSharedValue(0);
+  const activeIndex = useSharedValue(-1);
 
   const animatedProps = useAnimatedProps(() => {
     return {
-      scrollEnabled: !isPanning.value,
+      scrollEnabled: !isPanning.get(),
     };
   });
 
@@ -244,28 +382,37 @@ export default function Index() {
         <View
           style={[
             StyleSheet.absoluteFillObject,
-            { backgroundColor: theme.colors.background, opacity: 0.5 },
+            { backgroundColor: theme.colors.background, opacity: 0.1 },
           ]}
         />
         <Animated.FlatList
-          itemLayoutAnimation={LinearTransition.springify()}
+          itemLayoutAnimation={LinearTransition.springify()
+            .mass(1)
+            .damping(25)
+            .stiffness(200)}
           animatedProps={animatedProps}
           data={data}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
+          renderItem={({ item, index }) => (
             <NotificationCard
               item={item}
               isPanning={isPanning}
               onItemDelete={(id) => {
-                console.log("delete");
                 setData(data.filter((item) => item.id !== id));
               }}
+              adjacentOffset={adjacentOffset}
+              isAdjacent={Math.abs(activeIndex.get() - index) === 1}
+              isPrevious={index < activeIndex.get()}
+              index={index}
+              activeIndex={activeIndex}
+              firstItem={index === 0}
+              lastItem={index === data.length - 1}
             />
           )}
           contentContainerStyle={{
             paddingHorizontal: 16,
             gap: 3,
-            paddingTop: top,
+            paddingTop: top + 20,
             paddingBottom: bottom,
           }}
           showsVerticalScrollIndicator={false}
@@ -281,11 +428,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 14,
+    overflow: "hidden",
   },
   icon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     marginRight: 12,
   },
   textContainer: {
