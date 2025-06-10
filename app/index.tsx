@@ -36,6 +36,8 @@ interface NotificationCardProps {
   activeIndex: SharedValue<number>;
   firstItem: boolean;
   lastItem: boolean;
+  isAdjacent?: boolean;
+  isPrevious?: boolean;
 }
 
 const NotificationCard = (props: NotificationCardProps) => {
@@ -213,80 +215,68 @@ const NotificationCard = (props: NotificationCardProps) => {
     const isActive = activeIndex.get() === index;
     const isAdjacentToActive = isAdjacent.get();
     const isPrev = isPrevious.get();
+    const offset = adjacentOffset?.get() || 0;
+    const absOffset = Math.abs(offset);
 
-    if (!isActive && !isAdjacentToActive) {
-      return {
-        transform: [{ translateX: 0 }],
-        ...(firstItem && {
-          borderTopLeftRadius: 40,
-          borderTopRightRadius: 40,
-        }),
-        ...(lastItem && {
-          borderBottomLeftRadius: 40,
-          borderBottomRightRadius: 40,
-        }),
-      };
-    }
+    const border = isActive
+      ? interpolate(
+          offsetX.get(),
+          [-SCREEN_WIDTH * 0.1, 0, SCREEN_WIDTH * 0.1],
+          [20, minBorderRadius, 20],
+          Extrapolation.CLAMP
+        )
+      : minBorderRadius;
 
-    if (isActive) {
-      const border = interpolate(
-        offsetX.get(),
-        [-SCREEN_WIDTH * 0.1, 0, SCREEN_WIDTH * 0.1],
-        [20, minBorderRadius, 20],
-        Extrapolation.CLAMP
-      );
-      return {
-        transform: [{ translateX: offsetX.get() }],
-        borderRadius: border,
-        borderTopLeftRadius: border,
-        borderTopRightRadius: border,
-        borderBottomLeftRadius: border,
-        borderBottomRightRadius: border,
-      };
-    }
+    // Only apply transform to active item or adjacent items
+    const transform = isActive
+      ? [{ translateX: offsetX.get() }]
+      : isAdjacentToActive
+      ? [{ translateX: offset }]
+      : [];
 
-    if (isAdjacentToActive) {
-      const offset = adjacentOffset?.get() || 0;
-      const absOffset = Math.abs(offset);
+    const borderRadius = {
+      borderRadius: border,
+      borderTopLeftRadius: firstItem ? 40 : border,
+      borderTopRightRadius: firstItem ? 40 : border,
+      borderBottomLeftRadius: lastItem ? 40 : border,
+      borderBottomRightRadius: lastItem ? 40 : border,
+    };
 
-      return {
-        transform: [{ translateX: offset }],
-        ...(offset > 0
-          ? isPrev
-            ? {
-                borderBottomLeftRadius: interpolate(
-                  absOffset,
-                  [0, SCREEN_WIDTH * 0.1],
-                  [minBorderRadius, 100]
-                ),
-              }
-            : {
-                borderTopLeftRadius: interpolate(
-                  absOffset,
-                  [0, SCREEN_WIDTH * 0.1],
-                  [minBorderRadius, 100]
-                ),
-              }
-          : isPrev
-          ? {
-              borderBottomRightRadius: interpolate(
-                absOffset,
-                [0, SCREEN_WIDTH * 0.1],
-                [minBorderRadius, 100]
-              ),
-            }
-          : {
-              borderTopRightRadius: interpolate(
-                absOffset,
-                [0, SCREEN_WIDTH * 0.1],
-                [minBorderRadius, 100]
-              ),
-            }),
-      };
+    if (isAdjacentToActive && !isActive) {
+      if (offset > 0) {
+        if (isPrev) {
+          borderRadius.borderBottomLeftRadius = interpolate(
+            absOffset,
+            [0, SCREEN_WIDTH * 0.1],
+            [minBorderRadius, 100]
+          );
+        } else {
+          borderRadius.borderTopLeftRadius = interpolate(
+            absOffset,
+            [0, SCREEN_WIDTH * 0.1],
+            [minBorderRadius, 100]
+          );
+        }
+      } else {
+        if (isPrev) {
+          borderRadius.borderBottomRightRadius = interpolate(
+            absOffset,
+            [0, SCREEN_WIDTH * 0.1],
+            [minBorderRadius, 100]
+          );
+        } else {
+          borderRadius.borderTopRightRadius = interpolate(
+            absOffset,
+            [0, SCREEN_WIDTH * 0.1],
+            [minBorderRadius, 100]
+          );
+        }
+      }
     }
 
     return {
-      transform: [{ translateX: adjacentOffset?.get() || 0 }],
+      transform,
+      ...borderRadius,
     };
   }, [
     activeIndex,
@@ -401,8 +391,6 @@ export default function Index() {
                 setData(data.filter((item) => item.id !== id));
               }}
               adjacentOffset={adjacentOffset}
-              isAdjacent={Math.abs(activeIndex.get() - index) === 1}
-              isPrevious={index < activeIndex.get()}
               index={index}
               activeIndex={activeIndex}
               firstItem={index === 0}
